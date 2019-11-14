@@ -8,9 +8,9 @@
 
 # standalone.xml 에서 인터페이스 부분
 ```
-interface 
-inet-address
-<any-address/>
+ interface 
+ inet-address
+ <any-address/>
 ```
 
 # jboss-cli.sh
@@ -92,18 +92,20 @@ ALL  CONFIG  DEBUG  ERROR  FATAL  FINE  FINER  FINEST  INFO  OFF  SEVERE  TRACE 
 # 도메인 구성
 
 ## host-master.xml - IP 주소 세팅
-
->    <interfaces>
->        <interface name="management">
->            <inet-address value="${jboss.bind.address.management:jboss1}"/>
->        </interface>
->    </interfaces>
+```
+    <interfaces>
+        <interface name="management">
+            <inet-address value="${jboss.bind.address.management:jboss1}"/>
+        </interface>
+    </interfaces>
+```
 
 ##  domain.xml 패스워드 세팅
-
->            <subsystem xmlns="urn:jboss:domain:messaging-activemq:1.0">
->                <server name="default">
->                    <cluster password="${jboss.messaging.cluster.password:JBoss@RedHat123}"/>
+```
+            <subsystem xmlns="urn:jboss:domain:messaging-activemq:1.0">
+                <server name="default">
+                    <cluster password="${jboss.messaging.cluster.password:JBoss@RedHat123}"/>
+```
 
 ## 도메인 컨트롤러 기동
 ./domain.sh -Djboss.domain.base.dir=/opt/machine1/domain/ --host-config=host-master.xml
@@ -124,14 +126,16 @@ ALL  CONFIG  DEBUG  ERROR  FATAL  FINE  FINER  FINEST  INFO  OFF  SEVERE  TRACE 
 ./domain.sh --cached-dc -Djboss.domain.master.address=192.168.0.14
 
 ## 슬레이브 호스트 컨트롤러에서 backup 컨트롤러 세팅 ( 다중 마스터 구성 )
-><domain-controller>  
->    <remote security-realm="ManagementRealm">  
->          <discovery-options>  
->              <static-discovery name="primary" host="172.16.81.100" port="9999"/>  
->              <static-discovery name="backup" host="172.16.81.101" port="9999"/>  
->          </discovery-options>  
->    </remote>  
-></domain-controller>
+```
+<domain-controller>  
+    <remote security-realm="ManagementRealm">  
+          <discovery-options>  
+              <static-discovery name="primary" host="172.16.81.100" port="9999"/>  
+              <static-discovery name="backup" host="172.16.81.101" port="9999"/>  
+		  </discovery-options>  
+    </remote>  
+</domain-controller>
+```
 
 ## CLI - 서버 추가 
 [domain@jboss1:9990 host=host3] 

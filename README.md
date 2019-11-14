@@ -7,9 +7,11 @@
 
 
 # standalone.xml 에서 인터페이스 부분
-> interface 
-> inet-address
-> <any-address/>
+```
+interface 
+inet-address
+<any-address/>
+```
 
 # jboss-cli.sh
 

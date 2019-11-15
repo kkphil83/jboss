@@ -298,6 +298,18 @@ blocking=true 속성은 서버들의 시작/중지 작업이 완료되면 다음
 
 ### JDBC 모듈 생성 
 ```
-[disconnected /] module add --name=com.mysql --resources=/home/jboss/mysql-connector-java.jar --dependencies=javax.api,javax.tracsaction.api
+[disconnected /] module add --name=com.mysql.driver --resources=/home/jboss/mysql-connector-java.jar --dependencies=javax.api,javax.tracsaction.api
+```
+### 모듈 제거
+```
+[disconnected /] module remove --name=com.mysql
+```
+### JDBC 드라이버 생성
+```
+/subsystem=datasources/jdbc-driver=mysql:add(driver-module-name=com.mysql.driver,driver-name=mysql,driver-class-name=com.mysql.jdbc.Driver)  
 ```
 
+### XA 데이터소스 생성
+```
+[standalone@jboss1:9990 data-source=city] xa-data-source add --name=mysqlxa --jndi-name=java:jboss/cityxa --driver-name=mysql --xa-datasource-class=com.mysql.jdbc.jdbc2.optional.MysqlXADataSource --user-name=root --password=JBoss@RedHat123 --xa-datasource-properties=[{"ServerName"=>"jboss1"},{"DatabaseName"=>"world"}]
+```

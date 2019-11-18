@@ -298,7 +298,7 @@ blocking=true 속성은 서버들의 시작/중지 작업이 완료되면 다음
 
 ### JDBC 모듈 생성 
 ```
-[disconnected /] module add --name=com.mysql.driver --resources=/home/jboss/mysql-connector-java.jar --dependencies=javax.api,javax.tracsaction.api
+[disconnected /] module add --name=com.mysql --resources=/home/jboss/mysql-connector-java.jar --dependencies=javax.api,javax.transaction.api
 ```
 ### 모듈 제거
 ```
@@ -306,10 +306,116 @@ blocking=true 속성은 서버들의 시작/중지 작업이 완료되면 다음
 ```
 ### JDBC 드라이버 생성
 ```
-/subsystem=datasources/jdbc-driver=mysql:add(driver-module-name=com.mysql.driver,driver-name=mysql,driver-class-name=com.mysql.jdbc.Driver)  
+/subsystem=datasources/jdbc-driver=mysql:add(driver-module-name=com.mysql,driver-name=mysql,driver-class-name=com.mysql.jdbc.Driver)  
 ```
 
-### XA 데이터소스 생성
+### 데이터소스 생성 (도메인 구성 - profile 선택)
 ```
-[standalone@jboss1:9990 data-source=city] xa-data-source add --name=mysqlxa --jndi-name=java:jboss/cityxa --driver-name=mysql --xa-datasource-class=com.mysql.jdbc.jdbc2.optional.MysqlXADataSource --user-name=root --password=JBoss@RedHat123 --xa-datasource-properties=[{"ServerName"=>"jboss1"},{"DatabaseName"=>"world"}]
+data-source add --profile=full-ha --name=world --driver-name=mysql --jndi-name=java:jboss/city --connection-url=jdbc:mysql://jboss1:3306//world --user-name=root --password=JBoss@RedHat123
+```
+
+### XA 데이터소스 생성 (standalone 구성)
+```
+xa-data-source add --name=mysqlxa --jndi-name=java:jboss/cityxa --driver-name=mysql --xa-datasource-class=com.mysql.jdbc.jdbc2.optional.MysqlXADataSource --user-name=root --password=JBoss@RedHat123 --xa-datasource-properties=[{"ServerName"=>"jboss1"},{"DatabaseName"=>"world"}]
+```
+
+# 로깅
+
+## 비동기 핸들러 구성
+FILE_BY_SIZE 라는 파일 핸들러가 사전에 구성된 경우
+```
+/profile=full-ha/subsystem=logging/async-handler=ASYNC:add(level=INFO,queue-length=1024,overflow-action=BLOCK,subhandlers=[FILE_BY_SIZE])
+```
+루트 로거에 ASYNC 핸들러 추가
+```
+/profile=full-ha/subsystem=logging/root-logger=ROOT:add-handler(name=ASYNC)
+```
+
+## 새로운 경로 변수 생성
+```
+/path=custom.log.dir:add(path=/var/log/jboss)
+```
+
+## 핸들러 생성
+```
+/profile=full-ha/subsystem=logging/size-rotating-file-handler=BOOKSTORE_LOG_HANDLER:add(file={"relative-to"=>"custom.log.dir", "path"=>"${jboss.server.name}/bookstore.log"}, enabled=true, append=true, autoflush=true, rotate-size=1m, max-backup-index=5, level=DEBUG)
+```
+
+## 새 로거 범주 생성
+```
+/profile=full-ha/subsystem=logging/logger=javax.sql:add(category=javax.sql, level=ALL, handlers=["BOOKSTORE_LOG_HANDLER"])
+```
+
+
+# 메시징 하위 시스템
+
+```
+JMS 하위 모니터링
+/profile=full-ha/subsystem=messaging-activemq/server=default/jms-queue=ExpiryQueue:read-attribute(name=message-count)
+
+대기 중인 메시지 나열
+/profile=full-ha/subsystem=messaging-activemq/server=default/jms-queue=DLQ:list-messages
+
+pooled-connection-factory 생성
+/profile=full-ha/subsystem=messaging-activemq/server=default/pooled-connection-factory=custom:add(connectors=[in-vm], entries=[java:/jms/CustomCF])
+
+관리콘솔에서 JMS QUEUE 생성
+
+JMS Queue 내용 확인
+/profile=full-ha/subsystem=messaging-activemq/server=default/jms-queue=TestQueue:read-resource(include-runtime=true)
+
+/profile=full-ha/subsystem=messaging-activemq/server=default/jms-queue=TestQueue:list-messages
+
+메세징 권한 확인
+/profile=full-ha/subsystem=messaging-activemq/server=default/security-setting=#/role=guest:read-resource
+
+권한 추가 (remove는 삭제)
+/profile=full-ha/subsystem=messaging-activemq/server=default/security-setting=#/role=sender:add(send=true)
+
+```
+
+## 메시지 전달 실패 처리
+
+```
+[domain@jboss1:9990 server=default] ./address-setting=#:read-resource
+{
+    "outcome" => "success",
+    "result" => {
+        "address-full-policy" => "PAGE",
+        "auto-create-jms-queues" => false,
+        "auto-delete-jms-queues" => false,
+        "dead-letter-address" => "jms.queue.DLQ", (실패한 메시지가 이동)
+        "expiry-address" => "jms.queue.ExpiryQueue",
+        "expiry-delay" => -1L,
+        "last-value-queue" => false,
+        "max-delivery-attempts" => 10,  (10번의 시도 후)
+        "max-redelivery-delay" => 0L,
+        "max-size-bytes" => 10485760L,
+        "message-counter-history-day-limit" => 10,
+        "page-max-cache-size" => 5,
+        "page-size-bytes" => 2097152L,
+        "redelivery-delay" => 0L,   (지연 없음)
+        "redelivery-multiplier" => 1.0,
+        "redistribution-delay" => 1000L,
+        "send-to-dla-on-no-route" => false,
+        "slow-consumer-check-period" => 5L,
+        "slow-consumer-policy" => "NOTIFY",
+        "slow-consumer-threshold" => -1L
+    }
+}
+```
+
+## 메시지 큐의 address setting 시 실패 처리 적용
+```
+[domain@jboss1:9990 server=default] ./address-setting=jms.queue.testQueue:add(redelivery-delay=5000, dead-letter-address=jms.queue.DLQ, max-delivery-attempts=3)
+```
+
+## 오래 걸린 메시지를 다른 큐로 이동
+```
+[domain@jboss1:9990 server=default] ./address-setting=jms.queue.testQueue:add(expiry-delay=1200000, expiry-address=jms.queue.ExpiryQueue)
+```
+
+## servera.1 에서 그룹의 모든 인스턴스를 표시하는지 확인 
+```
+/host=servera/server=servera.1/subsystem=messaging-activemq/server=default/cluster-connection=my-cluster:read-attribute(name=topology)
 ```

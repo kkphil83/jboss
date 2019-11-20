@@ -419,3 +419,422 @@ JMS Queue 내용 확인
 ```
 /host=servera/server=servera.1/subsystem=messaging-activemq/server=default/cluster-connection=my-cluster:read-attribute(name=topology)
 ```
+
+
+# 보안
+
+## 데이터베이스 보안 도메인 구성
+### DB 가 미리 구성되어야 함
+```
+/subsystem=security/security-domain=db-domain:add(cache-type=default)
+
+/subsystem=security/security-domain=db-domain/authentication=classic:add
+(login-modules=[{"code"=>"Database", "flag"=>"required", "module-options"=>[
+("dsJndiName"=>"java:jboss/city"), 
+("principalsQuery"=>"SELECT password FROM users WHERE username = ?"), 
+("rolesQuery"=>"SELECT role, 'Roles' FROM roles WHERE username = ?"), 
+("hashAlgorithm"=>"SHA-256"), ("hashEncoding"=>"base64")]}])
+```
+
+### 속성 수정 방법
+```
+/subsystem=security/security-domain=db-domain/authentication=classic/login-module=Database
+[standalone@jboss1:9990 login-module=Database] :map-put(name=module-options, key="dsJndiName", value="java:jboss/city")
+```
+
+## 어플리케이션 보안 도메인 구성
+### jboss-web.xml 안에 security-domain 내용 필요
+```
+<jboss-web>
+    <security-domain>my-domain</security-domain>
+</jboss-web>
+```
+### web.xml 에 security-constraint, security-role, login-config 내용 필요
+```
+<security-constraint>
+  <web-resource-collection>
+    <web-resource-name>ALL resources</web-resource-name>
+    <url-pattern>/*</url-pattern>
+    <http-method>GET</http-method>
+    <http-method>POST</http-method>
+  </web-resource-collection>
+  <auth-constraint>
+    <role-name>*</role-name>
+  </auth-constraint>
+</security-constraint>
+
+<security-role>
+  <role-name>*</role-name>
+</security-role>
+
+<login-config>
+  <auth-method>BASIC</auth-method>
+  <realm-name>my-domain</realm-name>
+</login-config>
+```
+
+## LDAP 보안 구성
+```
+# docker LDAP 샘플 구성
+docker run -d -e DOMAIN=jboss1 -e PASSWORD=admin --name=ldap --net=host -v /var/lib/ldap/data:/var/lib/ldap -v /var/lib/ldap/conf:/etc/ldap/slapd.d siji/openldap:2.4.42
+```
+```
+ldapsearch -x -D "cn=admin,dc=jboss1" -w admin -b "dc=jboss1"
+```
+
+### LDAP 보안 도메인 구성
+```
+/subsystem=security/security-domain=ldap:add(cache-type=default)
+
+/subsystem=security/security-domain=ldap/authentication=classic:add
+```
+```
+/subsystem=security/security-domain=ldap/authentication=classic/login-module=ldap_login:add(code=ldap, flag=required, module-options=[("java.naming.factory.initial"=>"com.sun.jndi.ldap.LdapCtxFactory"), ("java.naming.provider.url"=>"ldap://jboss1:389"), ("java.naming.security.authentication"=>"simple"), ("principalDNPrefix"=>"uid="), ("principalDNSuffix"=>",ou=users,dc=jboss1"), ("rolesCtxDN"=>"ou=Roles,dc=jboss1"), ("uidAttributeID"=>"uid"), ("matchOnUserDN"=>"true"), ("roleAttributeID"=>"cn"), ("roleAttributeIsDN"=>"false")])
+
+```
+
+## JMS 대상 보안
+
+### 메시징 보안 도메인
+
+로컬 어플리케이션에 대한 인증을 활성화하려면 override-in-vm-security 특성을 false 로 변경
+```
+/profile=full-ha/subsystem=messaging-activemq/server=default:write-attribute(name=override-in-vm-security, value=false)
+```
+
+### 역할 확인
+
+```
+[domain@jboss1:9990 server=default] /profile=full-ha/subsystem=messaging-activemq/server=default/security-setting=#/role=guest:read-resource
+{
+    "outcome" => "success",
+    "result" => {
+        "consume" => true,
+        "create-durable-queue" => false,
+        "create-non-durable-queue" => true,
+        "delete-durable-queue" => false,
+        "delete-non-durable-queue" => true,
+        "manage" => false,
+        "send" => true
+    }
+} 
+```
+
+### 토픽 or 큐 보안
+
+jms-topic 생성
+```
+/profile=full-ha/subsystem=messaging-activemq/server=default/security-setting=jms.topic.StockQuotes.#:add
+```
+jms-topic 에 대한 send(전송), consume(사용) 권한을 publisherAndConsumer 역할에 부여함.
+```
+/profile=full-ha/subsystem=messaging-activemq/server=default/security-setting=jms.topic.StockQuotes.#/role=publisherAndConsumer:add(send=true,consume=true)
+```
+
+## 암호 자격 증명 모음 구성
+
+### 키스토어 생성
+```
+keytool -genseckey -alias vault -keyalg AES -storetype jceks -keysize 128 -keystore /opt/domain/vault.keystore
+```
+### 아래 파일에서 의존성 추가
+/opt/jboss-eap-7.0/modules/system/layers/base/org/picketbox/main/module.xml
+```
+    <dependencies>
+        <module name="sun.jdk"/>
+```
+
+### vault.sh 실행
+```
+jboss@jboss1:~:> /opt/jboss-eap-7.0/bin/vault.sh --keystore /opt/domain/vault.keystore --keystore-password password --alias vault --vault-block valut --attribute password --sec-attr JBoss@RedHat123 --enc-dir /opt/domain/ --iteration 50 --salt 12345678
+WARNING JBOSS_HOME may be pointing to a different installation - unpredictable results may occur.
+
+=========================================================================
+
+  JBoss Vault
+
+  JBOSS_HOME: /opt/jboss-eap-7.0
+
+  JAVA: java
+
+=========================================================================
+
+Nov 19, 2019 12:12:26 AM org.picketbox.plugins.vault.PicketBoxSecurityVault init
+INFO: PBOX00361: Default Security Vault Implementation Initialized and Ready
+WFLYSEC0047: Secured attribute value has been stored in Vault.
+Please make note of the following:
+********************************************
+Vault Block:valut
+Attribute Name:password
+Configuration should be done as follows:
+VAULT::valut::password::1
+********************************************
+WFLYSEC0048: Vault Configuration in WildFly configuration file:
+********************************************
+...
+</extensions>
+<vault>
+  <vault-option name="KEYSTORE_URL" value="/opt/domain/vault.keystore"/>
+  <vault-option name="KEYSTORE_PASSWORD" value="MASK-31x/z0Xn83H4JaL0h5eK/N"/>
+  <vault-option name="KEYSTORE_ALIAS" value="vault"/>
+  <vault-option name="SALT" value="12345678"/>
+  <vault-option name="ITERATION_COUNT" value="50"/>
+  <vault-option name="ENC_FILE_DIR" value="/opt/domain/"/>
+</vault><management> ...
+```
+
+### messaging-acrivemq 하위 시스템의 기본 보안 도메인: other
+```
+[domain@jboss1:9990 /] /profile=full-ha/subsystem=messaging-activemq/server=default:read-attribute(name=security-domain)
+{
+    "outcome" => "success",
+    "result" => "other"
+}
+```
+
+# JVM 구성
+## server 개별 설정
+```
+/host=serverb/server-config=serverb.2/jvm=serverb.2-jvm:add(heap-size=1200m, max-heap-size=1200m, jvm-options=["-XX:+AggressiveOpts"])
+```
+WAS 재기동
+```
+/host=serverb/server-config=serverb.2:restart(blocking=true)
+```
+
+## host 에서 default JVM 설정 변경
+```
+/host=servera/jvm=default:write-attribute(name=heap-size,value=512m)
+/host=servera/jvm=default:write-attribute(name=max-heap-size,value=512m)
+```
+
+## 그룹 범위 JVM 구성
+```
+/server-group=Group1/jvm=group1-jvm:add(heap-size=512m, max-heap-size=1024m, jvm-options=["-server"])
+```
+
+# 웹 하위 시스템 구성
+
+## Root Context 변경
+### 기본 Root Application / 위치 제거
+```
+/subsystem=undertow/server=default-server/host=default-host/location=\/:remove
+
+reload
+```
+
+### sample.war 어플리케이션에 / 위치 매핑
+```
+/subsystem=undertow/server=default-server/host=default-host:write-attribute
+
+reload
+```
+
+## 버퍼 캐시 
+사이즈 변경
+```
+/subsystem=undertow/buffer-cache=default:write-attribute(name=buffer-size, value=2048)
+```
+## 서블릿 컨테이너 구성 정보
+```
+[standalone@jboss1:9990 /] /subsystem=undertow/servlet-container=default:read-resource
+{
+    "outcome" => "success",
+    "result" => {
+        "allow-non-standard-wrappers" => false,
+        "default-buffer-cache" => "default",
+        "default-encoding" => undefined,
+        "default-session-timeout" => 30,   (세션 타임아웃 30분)
+        "directory-listing" => undefined,
+        "disable-caching-for-secured-pages" => true,
+        "eager-filter-initialization" => false,
+        "ignore-flush" => false,
+        "max-sessions" => undefined,  (최대 세션 개수)
+        "proactive-authentication" => true,
+        "session-id-length" => 30,    (세션ID 문자열 개수)
+        "stack-trace-on-error" => "local-only",
+        "use-listener-encoding" => false,
+        "mime-mapping" => undefined,
+        "setting" => {
+            "jsp" => undefined,
+            "websockets" => undefined
+        },
+        "welcome-file" => undefined
+    },
+    "response-headers" => {"process-state" => "reload-required"}
+}
+```
+
+## 파일 핸들러
+생성
+```
+/subsystem=undertow/configuration=handler/file=photos:add(path=/var/photos, directory-listing=true)
+```
+가상호스트에 첨부
+```
+/subsystem=undertow/server=default-server/host=default-host/location=photos:add(handler=photos)
+```
+
+## 필터
+추가
+```
+/subsystem=undertow/configuration=filter/gzip=gzip:add
+```
+
+## HTTPS 서비스 구성
+키스토어 파일 생성
+```
+keytool -genkeypair -alias appserver -storetype jks -keyalg RSA -keysize 2048 -keystore identity.jks
+```
+키스토어 인증서 확인
+```
+keytool -list -v -keystore ./identity.jks
+```
+HTTPS 용도의 Realm 구성
+```
+/core-service=management/security-realm=HTTPSRealm:add
+
+/core-service=management/security-realm=HTTPSRealm/server-identity=ssl:add(keystore-path=/opt/identity.jks, keystore-password=changeit, alias=appserver)
+
+reload
+```
+HTTPS 리스너 구성
+```
+/subsystem=undertow/server=default-server/https-listener=https:add(socket-binding=https, security-realm=HTTPSRealm)
+```
+
+## AJP 활성화
+```
+/subsystem=undertow/server=default-server/ajp-listener=ajp:add(socket-binding=ajp)
+```
+
+## HTTP 리스너 조정
+최대 연결 수 200 
+```
+/subsystem=undertow/server=default-server/http-listener=default:write-attribute(name=max-connections, value=200)
+```
+
+## 도메인 구성에서 HTTPS 구성
+SSL 연결 구성 만들기 (host설정)
+```
+/host=servera/core-service=management/security-realm=HTTPSRealm:add
+
+/host=serverb/core-service=management/security-realm=HTTPSRealm:add
+
+/host=servera/core-service=management/security-realm=HTTPSRealm/server-identity=ssl:add(keystore-path=/opt/keystore/identity.jks, keystore-password=changeit, alias=appserver)
+
+/host=serverb/core-service=management/security-realm=HTTPSRealm/server-identity=ssl:add(keystore-path=/opt/keystore/identity.jks, keystore-password=changeit, alias=appserver)
+
+/host=servera:reload
+
+/host=serverb:reload
+```
+
+HTTPS 리스너 구성 (profile설정)
+```
+/profile=full-ha/subsystem=undertow/server=default-server/https-listener=https:add(socket-binding=https, security-realm=HTTPSRealm)
+```
+
+HTTPS 리스너 조정 (profile설정)
+```
+/profile=full-ha/subsystem=undertow/server=default-server/https-listener=https:write-attribute(name=max-connections, value=200)
+```
+
+# 클러스터된 어플리케이션 배포
+
+## standalone-full-ha.xml 로 2대 인스턴스 구성
+```
+/opt/jboss-eap-7.0/bin/standalone.sh -Djboss.server.base.dir=/opt/jgroups-cluster1/ -Djboss.node.name=jgroups-cluster1 -c standalone-full-ha.xml
+
+/opt/jboss-eap-7.0/bin/standalone.sh -Djboss.server.base.dir=/opt/jgroups-cluster2/ -Djboss.socket.binding.port-offset=100 -Djboss.node.name=jgroups-cluster2 -c standalone-full-ha.xml
+```
+
+## TCP 7600,7700 으로 통신 변경(기본 udp 45688)
+tcpping 프로토콜 생성
+```
+batch
+/subsystem=jgroups/stack=tcpping:add
+/subsystem=jgroups/stack=tcpping:add-protocol(type=TCPPING)
+/subsystem=jgroups/stack=tcpping/transport=TRANSPORT:add(socket-binding=jgroups-tcp, type=TCP)
+run-batch
+
+batch
+/subsystem=jgroups/stack=tcpping/protocol=TCPPING/property=initial_hosts:add(value="jboss1[7600],jboss1[7700]")
+/subsystem=jgroups/stack=tcpping/protocol=TCPPING/property=port_range:add(value=10)
+/subsystem=jgroups/stack=tcpping:add-protocol(type=MERGE2)
+/subsystem=jgroups/stack=tcpping:add-protocol(socket-binding=jgroups-tcp-fd, type=FD_SOCK)
+/subsystem=jgroups/stack=tcpping:add-protocol(type=FD)
+/subsystem=jgroups/stack=tcpping:add-protocol(type=VERIFY_SUSPECT)
+/subsystem=jgroups/stack=tcpping:add-protocol(type=BARRIER)
+/subsystem=jgroups/stack=tcpping:add-protocol(type=pbcast.NAKACK)
+/subsystem=jgroups/stack=tcpping:add-protocol(type=UNICAST2)
+/subsystem=jgroups/stack=tcpping:add-protocol(type=pbcast.STABLE)
+/subsystem=jgroups/stack=tcpping:add-protocol(type=pbcast.GMS)
+/subsystem=jgroups/stack=tcpping:add-protocol(type=UFC)
+/subsystem=jgroups/stack=tcpping:add-protocol(type=MFC)
+/subsystem=jgroups/stack=tcpping:add-protocol(type=FRAG2)
+/subsystem=jgroups/stack=tcpping:add-protocol(type=RSVP)
+/subsystem=jgroups/channel=ee:write-attribute(name=stack, value=tcpping)
+run-batch
+:reload
+```
+
+## 로드 밸런서 구성 (별도의 서버)
+```
+리버스 프록시 핸들러 생성
+/subsystem=undertow/configuration=handler/reverse-proxy=cluster-handler:add
+
+백엔드 서버 구성 server1 host/port 추가
+/socket-binding-group=standard-sockets/remote-destination-outbound-socket-binding=remote-server1:add(host=jboss1, port=8009)
+
+리버스 프록시 핸들러에 server1 및 path 추가
+/subsystem=undertow/configuration=handler/reverse-proxy=cluster-handler/host=server1:add(outbound-socket-binding=remote-server1, scheme=ajp, instance-id=server1, path=/cluster)
+
+백엔드 서버 구성 server2 host/port 추가
+/socket-binding-group=standard-sockets/remote-destination-outbound-socket-binding=remote-server2:add(host=jboss1, port=8109)
+
+리버스 프록시 핸들러에 server2 및 path 추가
+/subsystem=undertow/configuration=handler/reverse-proxy=cluster-handler/host=server2:add(outbound-socket-binding=remote-server2, scheme=ajp, instance-id=server2, path=/cluster)
+
+리버스 프록시 핸들러에 관리할 path 경로 추가
+/subsystem=undertow/server=default-server/host=default-host/location=\/cluster:add(handler=cluster-handler)
+```
+
+
+## 도메인 + 로드밸런서
+로드밸런서 기동
+```
+/opt/jboss-eap-7.0/bin/standalone.sh -Djboss.server.base.dir=/opt/lb2/ -Djboss.bind.address=jboss1 -Djboss.socket.binding.port-offset=1000 -c standalone-ha.xml
+```
+도메인 컨트롤러에서 광고 비활성화
+```
+/profile=full-ha/subsystem=modcluster/mod-cluster-config=configuration:write-attribute(name=advertise, value=false)
+```
+로드 밸런서를 프록시 구성
+```
+/socket-binding-group=full-ha-sockets/remote-destination-outbound-socket-binding=lb:add(host=jboss1, port=9080)
+```
+프록시를 mod_cluster_config 구성에 추가
+```
+/profile=full-ha/subsystem=modcluster/mod-cluster-config=configuration:list-add(name=proxies, value=lb)
+```
+마스터 리로드
+```
+reload --host=master
+```
+로드 밸런서에서 속성 추가
+```
+/subsystem=modcluster/mod-cluster-config=configuration:write-attribute(name=advertise-security-key, value=redhat)
+```
+undertow - modcluster 필터 구성
+```
+/subsystem=undertow/configuration=filter/mod-cluster=modcluster:add(management-socket-binding=http, advertise-socket-binding=modcluster, security-key=redhat)
+```
+modcluster 필터를 undertow default-server 에 바인딩
+```
+/subsystem=undertow/server=default-server/host=default-host/filter-ref=modcluster:add
+
+:reload
+```
+
+
